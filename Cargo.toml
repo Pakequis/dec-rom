@@ -1,0 +1,22 @@
+[package]
+name = "dec-rom"
+version = "0.1.0"
+edition = "2021"
+description = "Desktop tool for recovering the address/data bit wiring of a scrambled EPROM dump"
+license = "MIT"
+repository = "https://github.com/pakequis/dec-rom"
+authors = ["Pakequis <pakequis@gmail.com>"]
+readme = "README.md"
+
+[dependencies]
+eframe = "0.35"
+egui = "0.35"
+rfd = "0.17"
+itertools = "0.15"
+rand = "0.10"
+flate2 = "1.1"
+mos6502 = "0.10"
+iced-x86 = "1.21"
+
+[profile.release]
+lto = "thin"

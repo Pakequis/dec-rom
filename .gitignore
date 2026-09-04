@@ -1,0 +1,35 @@
+# Rust
+/target/
+
+# Legacy Python implementation (kept locally for reference, not tracked)
+old/
+
+# Claude Code tooling artifacts (local session/plan state, never committed)
+.claude/
+.superpowers/
+.worktrees/
+
+# Sample ROM dumps (may contain third-party/copyrighted content)
+samples/
+
+# Project documentation and example/scratch binaries (local only, not tracked)
+docs/
+examples/
+
+# Python (still relevant inside old/, which git still scans for ignore patterns)
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+build/
+*.spec
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
