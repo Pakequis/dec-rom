@@ -7,8 +7,9 @@
 //! DDX 3.1, TPX102, MegaRAM Disk) in `company_specific_pairs`, tried as
 //! atomic (address, data) pairs in Tier 1 (Fort Games, DDX 3.1, TPX102,
 //! MegaRAM Disk, ITS Games) - tried as literal candidates before the
-//! expensive search, gated by disassembly confirmation (layer 3) since
-//! it's cheap for only a handful of candidates.
+//! search, gated by disassembly confirmation since it's cheap for only a
+//! handful of candidates. `autofix::find_scrambling` uses a match from here
+//! as one of its starting points, not as a final answer.
 //!
 //! Auto-Fix is scoped to Z80 only: every candidate here is confirmed and
 //! ranked against Z80's own decoder specifically, not compared across
@@ -34,9 +35,8 @@ use crate::scoring::compression_score;
 /// regardless of what compression or disassembly say about it) nor a real
 /// compression improvement over the as-loaded baseline must not be trusted
 /// just because it coincidentally clears some processor's `disasm::qualifies`
-/// threshold. This mirrors the main search's own compression-improvement
-/// bar (see `autofix::CONFIDENCE_MARGIN`) rather than importing it directly
-/// — this module doesn't depend on `autofix` and shouldn't start now.
+/// threshold. It needs a compression gain of at least this much (see
+/// `scoring::compression_score`) over the as-loaded file.
 const MIN_CLEAR_IMPROVEMENT: f64 = 0.05;
 
 #[derive(Debug, Clone)]
@@ -216,9 +216,9 @@ fn company_specific_pairs(addr_bits: u32) -> Vec<(Vec<u32>, [u32; 8])> {
 /// component) — which, by the reasoning above, barely changes
 /// `compression_score` even for the genuinely correct recovery — can no
 /// longer be confirmed by this function, even though earlier versions of
-/// this code could. This isn't a silent regression: falling through to the
-/// full search (layer 2) is always the safe direction (it either finds the
-/// same answer more slowly, or degrades to `Confidence::Marginal`), and the
+/// this code could. This isn't a silent regression: returning `None` is
+/// always the safe direction (`autofix::find_scrambling` then relies on its
+/// other starting points, which handle data-only scrambles), and the
 /// alternative (confirming purely by `qualifies`) is exactly the mechanism
 /// that let the 68000 corruption above through undetected. Closing this gap
 /// without reopening that one would need a sharper signal than either bar
@@ -250,7 +250,7 @@ fn evaluate_pair(data: &[u8], addr_bits: u32, addr_map: Vec<u32>, data_map: [u32
 /// returns the highest-`disasm::coverage`-ranked candidate that clears
 /// `evaluate_pair`'s two bars within whichever tier produced a hit. `None`
 /// means no candidate in either tier clears both bars for `data` — the
-/// caller should fall through to the full search (layer 2).
+/// caller should rely on the full search (`autofix::find_scrambling`).
 pub fn try_known_patterns(data: &[u8], addr_bits: u32) -> Option<KnownPatternResult> {
     // Tier 1: cited, real-world (address, data) pairs, evaluated as atomic
     // units and given priority over Tier 2 below - see

@@ -270,12 +270,14 @@ impl DecRomApp {
         let Some(result) = &self.result else { return };
         let msg = match &result.confidence {
             Confidence::High => format!(
-                "{} — {}: {}, score: {:.3}, coverage: {:.3} ({:.1}s)",
+                "{} — {}: {}, {}: {} ({}: {}) ({:.1}s)",
                 t(self.lang, "Auto-Fix concluído (alta confiança)", "Auto-Fix finished (high confidence)"),
                 t(self.lang, "processador", "processor"),
                 result.processor.label(),
-                result.score,
-                result.coverage,
+                t(self.lang, "chamadas confirmadas", "confirmed calls"),
+                result.control_flow_hits,
+                t(self.lang, "2ª melhor ordem de dados", "next best data order"),
+                result.runner_up_hits,
                 result.elapsed.as_secs_f64()
             ),
             Confidence::Marginal(candidates) => format!(
@@ -442,12 +444,14 @@ impl eframe::App for DecRomApp {
                     match &result.confidence {
                         Confidence::High => {
                             ui.label(format!(
-                                "{} — {}: {}, score: {:.3}, coverage: {:.3}",
+                                "{} — {}: {}, {}: {} ({}: {})",
                                 t(self.lang, "Alta confiança", "High confidence"),
                                 t(self.lang, "processador", "processor"),
                                 result.processor.label(),
-                                result.score,
-                                result.coverage
+                                t(self.lang, "chamadas confirmadas", "confirmed calls"),
+                                result.control_flow_hits,
+                                t(self.lang, "2ª melhor ordem de dados", "next best data order"),
+                                result.runner_up_hits
                             ));
                         }
                         Confidence::Marginal(candidates) => {
@@ -458,8 +462,10 @@ impl eframe::App for DecRomApp {
                             egui::ScrollArea::vertical().id_salt("candidates").max_height(200.0).show(ui, |ui| {
                                 for (i, c) in candidates.iter().enumerate() {
                                     let text = format!(
-                                        "{} — score: {:.3}, coverage: {:.3}",
+                                        "{} — {}: {}, score: {:.3}, coverage: {:.3}",
                                         c.processor.label(),
+                                        t(self.lang, "chamadas confirmadas", "confirmed calls"),
+                                        c.control_flow_hits,
                                         c.compression_score,
                                         c.coverage
                                     );
@@ -687,7 +693,7 @@ mod tests {
     use dec_rom::detectors::Processor;
 
     fn candidate(addr_map: Vec<u32>, data_map: [u32; 8]) -> Candidate {
-        Candidate { addr_map, data_map, processor: Processor::Z80, compression_score: 0.0, coverage: 0.0, preview: Vec::new() }
+        Candidate { addr_map, data_map, processor: Processor::Z80, compression_score: 0.0, coverage: 0.0, control_flow_hits: 0 }
     }
 
     #[test]
@@ -704,13 +710,13 @@ mod tests {
                 data_map: IDENTITY_DATA_MAP,
                 score: 0.0,
                 coverage: 0.0,
+                control_flow_hits: 0,
+                runner_up_hits: 0,
                 confidence: Confidence::Marginal(vec![
                     candidate(identity_map, IDENTITY_DATA_MAP),
                     candidate(reversed_map, IDENTITY_DATA_MAP),
                 ]),
                 elapsed: Duration::ZERO,
-                max_k_covered: 0,
-                ascending_k_complete: true,
             }),
             ..Default::default()
         };
