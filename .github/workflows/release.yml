@@ -11,7 +11,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -47,6 +47,14 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      # Fails the build if any dependency, direct or transitive, is not
+      # under a license listed in deny.toml.
+      - name: License check
+        if: runner.os == 'Linux'
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses
+
       # Only the library unit tests run in CI: the integration tests under
       # tests/ load real EPROM dumps from a local samples/ directory that
       # is not committed (see .gitignore).
@@ -71,6 +79,9 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    # Only this job publishes, so only it may write to the repository.
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:

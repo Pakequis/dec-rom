@@ -288,7 +288,10 @@ impl AddrDiff {
         AddrDiff::new(Vec::new(), Vec::new())
     }
 
-    /// `map[logical_bit] = physical_bit_source`.
+    /// `map[i] = j` makes bit `i` of the address looked up in the dump equal
+    /// bit `j` of the decoded address (see `remap`): EPROM address pin `i`
+    /// is wired to CPU address line `j`. Note the direction is the opposite
+    /// of `build_data_lut`'s, whose map is indexed by the decoded (CPU) bit.
     pub fn from_full_map(map: &[u32]) -> AddrDiff {
         let mut positions = Vec::new();
         let mut sources = Vec::new();
@@ -340,6 +343,8 @@ impl AddrDiff {
     }
 }
 
+/// `map[i] = j` makes bit `i` of each decoded byte equal bit `j` of the byte
+/// read from the dump: CPU data line `i` is wired to EPROM data pin `j`.
 pub fn build_data_lut(map: &[u32; 8]) -> [u8; 256] {
     let mut lut = [0u8; 256];
     for val in 0u32..256 {

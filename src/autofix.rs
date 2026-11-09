@@ -26,6 +26,7 @@
 //! both what random bytes reach and what the second-best data-bit permutation
 //! reaches (`is_confident`).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use rand::{rngs::StdRng, RngExt, SeedableRng};
@@ -320,6 +321,21 @@ pub fn find_scrambling(
     addr_bits: u32,
     time_budget: Duration,
     seed: u64,
+    progress: impl FnMut(u32, &str),
+) -> AutoFixResult {
+    find_scrambling_cancellable(data, addr_bits, time_budget, seed, &AtomicBool::new(false), progress)
+}
+
+/// Same as `find_scrambling`, but stops early once `cancel` is set and
+/// returns the best result found until then. The first starting point is
+/// never skipped (there would be nothing to return), and a step in progress
+/// finishes before the flag is looked at again.
+pub fn find_scrambling_cancellable(
+    data: &[u8],
+    addr_bits: u32,
+    time_budget: Duration,
+    seed: u64,
+    cancel: &AtomicBool,
     mut progress: impl FnMut(u32, &str),
 ) -> AutoFixResult {
     debug_assert!(addr_bits >= 2, "find_scrambling requires at least 2 address bits, got {addr_bits}");
@@ -350,7 +366,7 @@ pub fn find_scrambling(
         solution.as_ref().is_some_and(|s| is_confident(s.hits(), s.runner_up_hits(), size))
     };
     for (index, addr_map) in starting_points.iter().enumerate() {
-        if confident(&best) || tried.contains(addr_map) {
+        if confident(&best) || tried.contains(addr_map) || (best.is_some() && cancel.load(Ordering::Relaxed)) {
             continue;
         }
         tried.push(addr_map.clone());
@@ -365,7 +381,10 @@ pub fn find_scrambling(
     let mut rng = StdRng::seed_from_u64(seed);
     let mut stale_restarts = 0;
     let mut longest_restart = Duration::ZERO;
-    while !is_confident(best.hits(), best.runner_up_hits(), size) && stale_restarts < MAX_STALE_RESTARTS {
+    while !is_confident(best.hits(), best.runner_up_hits(), size)
+        && stale_restarts < MAX_STALE_RESTARTS
+        && !cancel.load(Ordering::Relaxed)
+    {
         // A restart isn't interrupted once it begins, so one is only begun
         // if the slowest restart so far would still fit in the budget.
         let elapsed = start.elapsed();
@@ -607,6 +626,22 @@ mod tests {
         let result = find_scrambling(&noise, ROM_ADDR_BITS, Duration::ZERO, 42, |_, _| {});
 
         assert!(matches!(result.confidence, Confidence::Marginal(_)), "random bytes must not be confirmed as Z80 code");
+    }
+
+    #[test]
+    fn a_cancelled_search_skips_the_restarts_and_still_returns_a_result() {
+        let mut rng = Lcg(6);
+        let noise: Vec<u8> = (0..ROM_SIZE).map(|_| rng.next() as u8).collect();
+        let cancel = AtomicBool::new(true);
+        let mut restarted = false;
+
+        // An hour of budget: only the cancel flag can end this quickly.
+        let result = find_scrambling_cancellable(&noise, ROM_ADDR_BITS, Duration::from_secs(3600), 42, &cancel, |pct, _| {
+            restarted |= (60..100).contains(&pct);
+        });
+
+        assert!(!restarted, "a cancelled search must not start any restart");
+        assert!(matches!(result.confidence, Confidence::Marginal(_)));
     }
 
     #[test]

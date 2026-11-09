@@ -91,6 +91,15 @@ fn invert(map: &[u32]) -> Vec<u32> {
     inverse
 }
 
+/// Whether `map` uses every value in `0..map.len()` exactly once - what a
+/// bit-wiring table must do to describe a real wiring. A table that names
+/// one line twice would otherwise load or save without complaint as a
+/// mapping that drops one line and duplicates another.
+fn is_permutation(map: &[u32]) -> bool {
+    let mut seen = vec![false; map.len()];
+    map.iter().all(|&v| (v as usize) < seen.len() && !std::mem::replace(&mut seen[v as usize], true))
+}
+
 /// Parses one `"X{n}  ->  X{m}"` row (arbitrary internal whitespace),
 /// returning `(n, m)`.
 fn parse_bit_row(line: &str, prefix: char) -> Option<(u32, u32)> {
@@ -158,6 +167,9 @@ pub fn parse_scheme_txt(bytes: &[u8], target_addr_bits: u32) -> Result<Scheme, S
     if data_rows != 8 || !seen_data.iter().all(|&s| s) {
         return Err("incomplete data-bus table (expected 8 rows, D0..D7)".to_string());
     }
+    if !is_permutation(&data_map) {
+        return Err("data-bus table maps two ROM lines to the same EPROM line".to_string());
+    }
 
     let addr_header = lines
         .iter()
@@ -181,6 +193,9 @@ pub fn parse_scheme_txt(bytes: &[u8], target_addr_bits: u32) -> Result<Scheme, S
     if addr_rows != declared_addr_bits || !seen_addr.iter().all(|&s| s) {
         return Err(format!("incomplete address-bus table (expected {declared_addr_bits} rows)"));
     }
+    if !is_permutation(&addr_naive) {
+        return Err("address-bus table maps two ROM lines to the same EPROM line, or to a line beyond the declared Endereço bit width".to_string());
+    }
 
     if target_addr_bits > declared_addr_bits {
         return Err(format!(
@@ -194,14 +209,10 @@ pub fn parse_scheme_txt(bytes: &[u8], target_addr_bits: u32) -> Result<Scheme, S
             ));
         }
     }
-    for (i, &naive) in addr_naive.iter().enumerate().take(target_addr_bits as usize) {
-        if naive >= target_addr_bits {
-            return Err(format!(
-                "address line A{i} maps to A{naive}, a line this {target_addr_bits}-bit ROM doesn't have"
-            ));
-        }
-    }
 
+    // The table is a permutation whose lines from `target_addr_bits` up all
+    // map to themselves, so the lines below it can only map among
+    // themselves: the kept part is a permutation on its own.
     let addr_map = invert(&addr_naive[..target_addr_bits as usize]);
     Ok(Scheme { comment, addr_map, data_map })
 }
@@ -223,8 +234,11 @@ fn encode_latin1(s: &str) -> Result<Vec<u8>, String> {
 /// "Comentários" field verbatim (any embedded line breaks are collapsed to
 /// spaces, since that field is a single line in this format); `addr_map`/
 /// `data_map` are in this project's own convention, the same one
-/// `parse_scheme_txt` returns.
+/// `parse_scheme_txt` returns. Errors if either map is not a permutation.
 pub fn write_scheme_txt(comment: &str, addr_map: &[u32], data_map: &[u32; 8]) -> Result<Vec<u8>, String> {
+    if !is_permutation(addr_map) || !is_permutation(data_map) {
+        return Err("the bit mapping uses the same line twice, so it does not describe a real wiring".to_string());
+    }
     let addr_bits = addr_map.len() as u32;
     let addr_naive = invert(addr_map);
     let block_kb = (1u64 << addr_bits) / 1024;
@@ -258,17 +272,17 @@ mod tests {
     use crate::reorganizer::{apply_data_lut, build_data_lut, AddrDiff};
 
     /// Loads a fixture from the local, untracked `samples/` directory.
-    /// Returns `None` (after a notice) when it is absent, so tests that
-    /// need real dumps skip instead of failing on a clean checkout.
+    /// Returns `None` (after a notice) when that whole directory is absent,
+    /// so tests that need real dumps skip instead of failing on a clean
+    /// checkout. When the directory exists, a missing fixture is a failure:
+    /// skipping then would hide a renamed or deleted file behind a pass.
     fn load_sample(name: &str) -> Option<Vec<u8>> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("samples").join(name);
-        match std::fs::read(&path) {
-            Ok(bytes) => Some(bytes),
-            Err(e) => {
-                eprintln!("skipping: samples/{name} not available ({e})");
-                None
-            }
+        let samples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("samples");
+        if !samples.is_dir() {
+            eprintln!("skipping: no local samples/ directory");
+            return None;
         }
+        Some(std::fs::read(samples.join(name)).unwrap_or_else(|e| panic!("samples/{name} must be readable: {e}")))
     }
 
     #[test]
@@ -534,6 +548,29 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_data_table_that_uses_one_eprom_line_twice() {
+        let mut rows = identity_pairs(8);
+        rows[1] = (1, 0); // D0 and D1 both map to D0
+        let bytes = doc(VALID_COMENTARIOS, VALID_ENDERECO_4BITS, &data_section(&rows), &addr_section(&identity_pairs(4)));
+        let err = parse_scheme_txt(&bytes, 4).unwrap_err();
+        assert!(err.contains("data-bus table maps two ROM lines"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn rejects_an_address_table_that_uses_one_eprom_line_twice() {
+        let rows = vec![(0, 1), (1, 1), (2, 2), (3, 3)]; // A0 and A1 both map to A1
+        let bytes = doc(VALID_COMENTARIOS, VALID_ENDERECO_4BITS, &data_section(&identity_pairs(8)), &addr_section(&rows));
+        let err = parse_scheme_txt(&bytes, 4).unwrap_err();
+        assert!(err.contains("address-bus table maps two ROM lines"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn refuses_to_write_a_mapping_that_is_not_a_permutation() {
+        assert!(write_scheme_txt("x", &[0, 0], &[0, 1, 2, 3, 4, 5, 6, 7]).is_err());
+        assert!(write_scheme_txt("x", &[0, 1], &[0, 0, 2, 3, 4, 5, 6, 7]).is_err());
+    }
+
+    #[test]
     fn rejects_dropping_a_non_fixed_point_high_address_line() {
         // Declares 4 bits but the target ROM only needs 2 (A0, A1). A2/A3
         // must be fixed points (Ai -> Ai) to be safely dropped; here A2
@@ -543,17 +580,6 @@ mod tests {
         let bytes = doc(VALID_COMENTARIOS, VALID_ENDERECO_4BITS, &data_section(&identity_pairs(8)), &addr_section(&rows));
         let err = parse_scheme_txt(&bytes, 2).unwrap_err();
         assert!(err.contains("cannot drop address line A2"), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn rejects_an_address_line_that_maps_to_a_line_the_target_rom_lacks() {
-        // Declares 4 bits, target ROM is 3 bits (A0..A2). A3 is correctly a
-        // fixed point and gets dropped, but A1 maps to A3 - a line the
-        // 3-bit ROM doesn't have.
-        let rows = vec![(0, 0), (1, 3), (2, 2), (3, 3)];
-        let bytes = doc(VALID_COMENTARIOS, VALID_ENDERECO_4BITS, &data_section(&identity_pairs(8)), &addr_section(&rows));
-        let err = parse_scheme_txt(&bytes, 3).unwrap_err();
-        assert!(err.contains("A1") && err.contains("A3"), "unexpected error: {err}");
     }
 
     #[test]

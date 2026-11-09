@@ -17,7 +17,7 @@ use crate::detectors::{Processor, ALL_PROCESSORS};
 /// shorter than this, however it decoded, is too small a sample to mean
 /// anything — this is what stops an 8-byte buffer from confirming on one
 /// lucky decode (see `qualifies`'s doc comment for the measured numbers
-/// this was calibrated from, via `examples/scratch_disasm_coverage.rs`).
+/// this was calibrated from).
 const MIN_QUALIFYING_RUN_BYTES: usize = 64;
 
 /// Minimum number of distinct first-opcode-byte values a run must contain
@@ -168,10 +168,10 @@ pub fn coverage(processor: Processor, data: &[u8]) -> f64 {
 /// different sizes clear wildly different absolute bars, and let an 8-byte
 /// buffer clear a small fractional bar with one lucky decode.
 ///
-/// Every threshold is read off measurements produced by
-/// `examples/scratch_disasm_coverage.rs`
-/// (`cargo run --release --example scratch_disasm_coverage -- N`), which
-/// reports, per processor, the qualifying-run byte count for the real
+/// Every threshold is read off measurements taken with
+/// `longest_run_diagnostics` and `qualifying_run_diagnostics` (below) by a
+/// calibration script kept outside this repository, which reports, per
+/// processor, the qualifying-run byte count for the real
 /// fixtures (whole file and per window) and for N independent
 /// pseudo-random buffers at each of 1KB, 2KB, 4KB, 8KB, 16KB, 32KB, 128KB,
 /// 256KB and 512KB (512KB was this project's maximum supported file size
@@ -179,8 +179,7 @@ pub fn coverage(processor: Processor, data: &[u8]) -> f64 {
 /// so the sweep's own top end is a conservative superset of today's actual
 /// ceiling rather than an exact match for it — 8086's own count is capped
 /// lower at the two largest sizes, since its
-/// decoder is the slowest of the four — see `sample_count_for` in that
-/// example). Noise runs grow with both buffer size and sample count, so the
+/// decoder is the slowest of the four). Noise runs grow with both buffer size and sample count, so the
 /// ceilings below are the worst case seen across all nine sizes at N=1000,
 /// not a smaller sample's — a run at N=200 reliably finds slightly lower
 /// ceilings (e.g. Z80 5,949 instead of 6,497) simply from having sampled
@@ -248,8 +247,7 @@ pub fn qualifies(processor: Processor, data: &[u8]) -> bool {
 /// Diagnostic only, not used by `coverage`/`qualifies`: the plain longest
 /// contiguous valid run's raw byte length and its distinct first-opcode-byte
 /// count, computed *without* applying `MIN_QUALIFYING_RUN_BYTES`/
-/// `MIN_QUALIFYING_RUN_DIVERSITY` — used by
-/// `examples/scratch_disasm_coverage.rs` to measure real fixture and noise
+/// `MIN_QUALIFYING_RUN_DIVERSITY` — used to measure real fixture and noise
 /// baselines so those two constants (and each `confirmed_threshold` value)
 /// are picked from actual data instead of guessed. Seeing the unfiltered run
 /// matters for calibration: when a processor's *qualifying* run is 0 in
@@ -263,9 +261,8 @@ pub fn longest_run_diagnostics(processor: Processor, data: &[u8]) -> (usize, usi
 
 /// Diagnostic only, not used by `coverage`/`qualifies`: same as
 /// `longest_qualifying_run_bytes`, but also returns the winning run's
-/// distinct-opcode count (not just its byte length) — used by
-/// `examples/scratch_disasm_coverage.rs` to show the qualifying run's full
-/// stats side by side with the unfiltered ones from `longest_run_diagnostics`.
+/// distinct-opcode count (not just its byte length) — used to show the
+/// qualifying run's full stats side by side with the unfiltered ones from `longest_run_diagnostics`.
 pub fn qualifying_run_diagnostics(processor: Processor, data: &[u8]) -> (usize, usize) {
     let Some(decode) = decoder_for(processor) else {
         return (0, 0);

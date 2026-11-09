@@ -24,10 +24,10 @@ them.
 
 Years later, with the help of Claude (the AI), I built this tool. The BIOS
 from that board (the "ITS ROM" in the old post) is now decoded by Auto-Fix in
-about 1 second, and the result is the MSX ROM header ("AB"). That is the
-fast path: the wiring of this board is now one of the known patterns Auto-Fix
-tries before it starts the general search. What blocked me in 2009 takes a
-second today.
+about 1 second, and the result is the MSX ROM header ("AB"). The wiring of
+this board is one of the known patterns Auto-Fix keeps, but the search does
+not depend on it: it finds the same answer on its own. What blocked me in
+2009 takes a second today.
 
 ## How it works
 
@@ -53,9 +53,10 @@ correct answer at hand. Two sources helped a lot:
 
 - **Alexandre Souza ([Tabajara](https://tabajara-labs.blogspot.com/))** found
   a Fort Games board and made the binaries available. That scrambling was
-  different from the one on my board. The automatic search never solved it
-  within the time I allowed, until I had the Fort Games wiring scheme. With it,
-  the tool recognizes the board in under a second.
+  different from the one on my board. For a long time the automatic search
+  did not solve it, and the tool only recognized the board after I had the
+  Fort Games wiring scheme. Today the search solves it on its own in about
+  1 second.
 - **[MSXPro](https://www.msxpro.com/news.html)**, where I got other binaries.
   A correct decode shows unmistakable signs, like the "AB" header of MSX
   ROMs, and that served as a check.

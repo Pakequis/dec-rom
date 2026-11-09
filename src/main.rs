@@ -25,7 +25,13 @@ fn windows_light_visuals() -> egui::Visuals {
 
 fn main() -> eframe::Result {
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1250.0, 1000.0]).with_resizable(false),
+        // Opens at a size that shows the whole controls panel without
+        // scrolling, but stays resizable down to a small minimum: a fixed
+        // window this tall would not fit a 768-pixel-high laptop screen.
+        // Below the opening size the controls panel scrolls.
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1250.0, 1000.0])
+            .with_min_inner_size([900.0, 500.0]),
         ..Default::default()
     };
     eframe::run_native(

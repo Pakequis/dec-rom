@@ -4,12 +4,11 @@
 //! real-chip-pinout bus reversal — see `crate::pinouts`), cross-produced
 //! together in `try_known_patterns`'s Tier 2, plus a growing set of cited
 //! real commercial MSX cartridge-converter/copier interfaces (Fort Games,
-//! DDX 3.1, TPX102, MegaRAM Disk) in `company_specific_pairs`, tried as
-//! atomic (address, data) pairs in Tier 1 (Fort Games, DDX 3.1, TPX102,
-//! MegaRAM Disk, ITS Games) - tried as literal candidates before the
-//! search, gated by disassembly confirmation since it's cheap for only a
-//! handful of candidates. `autofix::find_scrambling` uses a match from here
-//! as one of its starting points, not as a final answer.
+//! DDX 3.1, TPX102, MegaRAM Disk, ITS Games) in `company_specific_pairs`,
+//! tried as atomic (address, data) pairs in Tier 1 - literal candidates,
+//! gated by disassembly confirmation since it's cheap for only a handful of
+//! them. `autofix::find_scrambling` uses a match from here as one of its
+//! starting points, not as a final answer.
 //!
 //! Auto-Fix is scoped to Z80 only: every candidate here is confirmed and
 //! ranked against Z80's own decoder specifically, not compared across
@@ -305,17 +304,18 @@ mod tests {
     // clear Z80's threshold comfortably, and genuinely diverse.
     //
     // The dump lives in the local, untracked `samples/` directory; returns
-    // `None` (after a notice) when it is absent, so tests that need it skip
-    // instead of failing on a clean checkout.
+    // `None` (after a notice) when that whole directory is absent, so tests
+    // that need it skip instead of failing on a clean checkout. When the
+    // directory exists, a missing dump is a failure: skipping then would
+    // hide a renamed or deleted file behind a pass.
     fn real_z80_code() -> Option<Vec<u8>> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/fort_decodificada.rom");
-        match std::fs::read(&path) {
-            Ok(bytes) => Some(bytes),
-            Err(e) => {
-                eprintln!("skipping: samples/fort_decodificada.rom not available ({e})");
-                None
-            }
+        let samples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("samples");
+        if !samples.is_dir() {
+            eprintln!("skipping: no local samples/ directory");
+            return None;
         }
+        let path = samples.join("fort_decodificada.rom");
+        Some(std::fs::read(&path).unwrap_or_else(|e| panic!("samples/fort_decodificada.rom must be readable: {e}")))
     }
 
     /// The mathematical inverse of an `AddrDiff::from_full_map`-style

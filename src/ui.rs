@@ -4,11 +4,13 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use dec_rom::autofix::{find_scrambling, AutoFixResult, Confidence};
+use dec_rom::autofix::{find_scrambling_cancellable, AutoFixResult, Confidence};
 use dec_rom::reorganizer::{apply_data_lut, build_data_lut, AddrDiff, Rom};
 use dec_rom::scheme_txt::{parse_scheme_txt, write_scheme_txt};
 
@@ -62,6 +64,7 @@ struct LoadedRom {
 enum Action {
     Load,
     StartAutofix,
+    CancelAutofix,
     Save,
     LoadScheme,
     SaveScheme,
@@ -71,6 +74,9 @@ pub struct DecRomApp {
     loaded: Option<LoadedRom>,
     error: Option<String>,
     search: Option<Receiver<SearchMessage>>,
+    /// Set to ask the running search to stop early; a fresh flag is created
+    /// for every search, so a late request can never stop the next one.
+    cancel: Arc<AtomicBool>,
     progress: (u32, String),
     result: Option<AutoFixResult>,
     selected_candidate: usize,
@@ -113,6 +119,7 @@ impl Default for DecRomApp {
             loaded: None,
             error: None,
             search: None,
+            cancel: Arc::new(AtomicBool::new(false)),
             progress: (0, String::new()),
             result: None,
             selected_candidate: 0,
@@ -215,12 +222,23 @@ impl DecRomApp {
         let seed: u64 = rand::random();
         let time_budget = Duration::from_secs(self.time_budget_minutes as u64 * 60);
         let progress_tx = tx.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.cancel = Arc::clone(&cancel);
         thread::spawn(move || {
-            let result = find_scrambling(&data, addr_bits, time_budget, seed, move |pct, msg| {
+            let result = find_scrambling_cancellable(&data, addr_bits, time_budget, seed, &cancel, move |pct, msg| {
                 let _ = progress_tx.send(SearchMessage::Progress(pct, msg.to_string()));
             });
             let _ = tx.send(SearchMessage::Done(result));
         });
+    }
+
+    /// Asks the running search to stop. It finishes the step it is on and
+    /// then reports the best result it has, through the usual `poll_search`
+    /// path.
+    fn cancel_autofix(&mut self) {
+        if self.search.is_some() && !self.cancel.swap(true, Ordering::Relaxed) {
+            self.log(t(self.lang, "Cancelando o Auto-Fix...", "Cancelling Auto-Fix...").to_string());
+        }
     }
 
     fn poll_search(&mut self) {
@@ -435,9 +453,17 @@ impl eframe::App for DecRomApp {
                 });
 
                 let can_run = self.loaded.is_some() && self.search.is_none();
-                if ui.add_enabled(can_run, egui::Button::new("Auto-Fix")).clicked() {
-                    action = Some(Action::StartAutofix);
-                }
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(can_run, egui::Button::new("Auto-Fix")).clicked() {
+                        action = Some(Action::StartAutofix);
+                    }
+                    if ui
+                        .add_enabled(self.search.is_some(), egui::Button::new(t(self.lang, "Cancelar", "Cancel")))
+                        .clicked()
+                    {
+                        action = Some(Action::CancelAutofix);
+                    }
+                });
 
                 if let Some(result) = &self.result {
                     ui.separator();
@@ -486,7 +512,11 @@ impl eframe::App for DecRomApp {
                     let manual_controls_enabled = self.search.is_none();
 
                     ui.separator();
-                    ui.label(t(self.lang, "Endereços (mapeamento manual):", "Addresses (manual mapping):"));
+                    ui.label(t(
+                        self.lang,
+                        "Endereços (pino da EPROM <- linha da CPU):",
+                        "Addresses (EPROM pin <- CPU line):",
+                    ));
                     ui.add_enabled_ui(manual_controls_enabled, |ui| {
                         if bit_mapping_grid(ui, "addr_bit", "A", &mut self.manual_addr_map, addr_bits, 4) {
                             manual_map_changed = true;
@@ -494,7 +524,11 @@ impl eframe::App for DecRomApp {
                     });
 
                     ui.separator();
-                    ui.label(t(self.lang, "Dados (mapeamento manual):", "Data (manual mapping):"));
+                    ui.label(t(
+                        self.lang,
+                        "Dados (linha da CPU <- pino da EPROM):",
+                        "Data (CPU line <- EPROM pin):",
+                    ));
                     ui.add_enabled_ui(manual_controls_enabled, |ui| {
                         if bit_mapping_grid(ui, "data_bit", "D", &mut self.manual_data_map, 8, 4) {
                             manual_map_changed = true;
@@ -578,6 +612,7 @@ impl eframe::App for DecRomApp {
         match action {
             Some(Action::Load) => self.load_rom(),
             Some(Action::StartAutofix) => self.start_autofix(),
+            Some(Action::CancelAutofix) => self.cancel_autofix(),
             Some(Action::Save) => self.save_mapping(),
             Some(Action::LoadScheme) => self.load_scheme(),
             Some(Action::SaveScheme) => self.save_scheme(),
@@ -592,17 +627,29 @@ impl eframe::App for DecRomApp {
     }
 }
 
+/// Gives `source` to entry `index` of a bit mapping. A bit mapping must stay
+/// a permutation (every source used exactly once) to describe a real wiring,
+/// so the entry that held `source` until now receives the one `index` gives
+/// up: the two entries swap sources.
+fn assign_bit_source(target: &mut [u32], index: usize, source: u32) {
+    let previous = target[index];
+    if let Some(other) = target.iter().position(|&s| s == source) {
+        target[other] = previous;
+    }
+    target[index] = source;
+}
+
 /// Renders `target.len()` bit-source dropdowns (e.g. "A3 <- A7") as a grid
 /// with `cols` pairs per row, wrapping to a new row every `cols` entries -
-/// keeps the manual address mapping (up to 16 rows for a 64KB ROM) from
-/// growing tall enough to push the save/scheme buttons below the fold (see
-/// the "single window size, no left-side scrollbar" backlog item). Each
-/// label is a fixed size regardless of digit count, so columns stay
-/// aligned even past index 9 (e.g. "A10").
+/// keeps the manual address mapping (up to 16 rows for a 64KB ROM) compact
+/// enough that the save/scheme buttons below it stay in view. Each label is
+/// a fixed size regardless of digit count, so columns stay aligned even past
+/// index 9 (e.g. "A10"). Picking a source swaps it with the entry that held
+/// it (see `assign_bit_source`).
 fn bit_mapping_grid(ui: &mut egui::Ui, id_source: &str, prefix: &str, target: &mut [u32], source_count: u32, cols: usize) -> bool {
-    let mut changed = false;
+    let mut picked = None;
     egui::Grid::new(id_source).show(ui, |ui| {
-        for (i, val) in target.iter_mut().enumerate() {
+        for (i, &val) in target.iter().enumerate() {
             ui.horizontal(|ui| {
                 let label_height = ui.spacing().interact_size.y;
                 ui.add_sized([36.0, label_height], egui::Label::new(format!("{prefix}{i} <-")));
@@ -610,8 +657,8 @@ fn bit_mapping_grid(ui: &mut egui::Ui, id_source: &str, prefix: &str, target: &m
                     .selected_text(format!("{prefix}{val}"))
                     .show_ui(ui, |ui| {
                         for src in 0..source_count {
-                            if ui.selectable_value(val, src, format!("{prefix}{src}")).changed() {
-                                changed = true;
+                            if ui.selectable_label(val == src, format!("{prefix}{src}")).clicked() && val != src {
+                                picked = Some((i, src));
                             }
                         }
                     });
@@ -621,7 +668,10 @@ fn bit_mapping_grid(ui: &mut egui::Ui, id_source: &str, prefix: &str, target: &m
             }
         }
     });
-    changed
+    if let Some((index, source)) = picked {
+        assign_bit_source(target, index, source);
+    }
+    picked.is_some()
 }
 
 /// Renders a classic ASCII `[####----] NN%` progress bar of `width`
@@ -634,15 +684,12 @@ fn ascii_progress_bar(pct: u32, width: usize) -> String {
 
 /// Renders `lines` as a read-only scrolling log in a fixed-height scroll
 /// area, so it never grows the controls panel past what fits in the
-/// window (see the "single window size, no left-side scrollbar" backlog
-/// item) - like the hex view, this one keeps its own scrollbar. Uses the
-/// same monospace/default-color/background styling as `hex_view` rather
-/// than a distinct terminal palette, per the user's request. While
-/// `progress` is `Some((pct, message))`, an extra ASCII progress-bar line
-/// is drawn after the log history - replacing the previous
-/// `egui::ProgressBar` widget, at the user's request - and re-rendered
-/// each frame rather than appended to `lines`, so it updates in place
-/// instead of spamming the history with one line per tick.
+/// window - like the hex view, this one keeps its own scrollbar. Uses the
+/// same monospace/default-color/background styling as `hex_view`, so the
+/// two read as one family. While `progress` is `Some((pct, message))`, an
+/// extra ASCII progress-bar line is drawn after the log history and
+/// re-rendered each frame rather than appended to `lines`, so it updates
+/// in place instead of filling the history with one line per tick.
 fn log_panel(ui: &mut egui::Ui, lines: &VecDeque<String>, progress: Option<(u32, &str)>) {
     egui::ScrollArea::vertical().id_salt("log_scroll").max_height(140.0).stick_to_bottom(true).show(ui, |ui| {
         for line in lines {
@@ -732,6 +779,15 @@ mod tests {
             app.displayed_bytes, identity_view,
             "selecting a different candidate must change what the hex view shows"
         );
+    }
+
+    #[test]
+    fn assigning_a_bit_source_swaps_it_with_its_previous_holder() {
+        let mut map = [0u32, 1, 2, 3];
+        assign_bit_source(&mut map, 0, 2);
+        assert_eq!(map, [2, 1, 0, 3], "the entry that held source 2 must take over source 0");
+        assign_bit_source(&mut map, 3, 3);
+        assert_eq!(map, [2, 1, 0, 3], "re-picking the current source changes nothing");
     }
 
     #[test]

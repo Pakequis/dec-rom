@@ -171,11 +171,11 @@ mod tests {
 
     #[test]
     fn a_long_run_of_dd_fd_prefix_bytes_does_not_overflow_the_stack() {
-        // Reproduces a real process-abort (SIGABRT, not a catchable panic)
-        // found by the final whole-branch review: the original recursive
-        // chained-prefix handling recursed once per DD/FD byte with no depth
-        // bound. 64KB comfortably exceeds any real fixture's typical prefix
-        // run and is well past where the original code aborted in testing.
+        // Guards against a process abort (SIGABRT, not a catchable panic):
+        // a chained-prefix decoder that recurses once per DD/FD byte, with
+        // no depth bound, overflows the stack on a long run of them. 64KB
+        // is far beyond any real ROM's prefix run and well past the depth
+        // at which such a decoder aborts.
         let bytes = vec![0xFDu8; 65536];
         // Just needs to return without crashing the test process; the exact
         // value doesn't matter (a run with no terminating opcode after it
